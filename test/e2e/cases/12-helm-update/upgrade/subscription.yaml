@@ -1,9 +1,10 @@
 apiVersion: apps.open-cluster-management.io/v1
 kind: Subscription
 metadata:
-  name: nginx-sub
+  name: nginx-helm-sub
+  namespace: default
 spec:
-  channel: dev/dev-helmrepo
+  channel: default/dev-helmrepo
   name: nginx-ingress
   placement:
     placementRef:
@@ -17,5 +18,4 @@ spec:
     packageOverrides:
     - path: spec
       value:
-        defaultBackend:
-          replicaCount: 3
+        abc: def

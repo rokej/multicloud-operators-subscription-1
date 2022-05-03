@@ -163,7 +163,7 @@ func (sync *KubeSynchronizer) PurgeAllSubscribedResources(appsub *appv1alpha1.Su
 				SubscriptionPackageStatus: appSubUnitStatuses,
 			}
 
-			err := sync.SyncAppsubClusterStatus(appsub, appsubClusterStatus, nil)
+			err := sync.SyncAppsubClusterStatus(appsub, appsubClusterStatus, nil, nil)
 			if err != nil {
 				klog.Warning("error while sync app sub cluster status: ", err)
 			}
@@ -208,7 +208,7 @@ func (sync *KubeSynchronizer) PurgeAllSubscribedResources(appsub *appv1alpha1.Su
 		SubscriptionPackageStatus: appSubUnitStatuses,
 	}
 
-	err = sync.SyncAppsubClusterStatus(appsub, appsubClusterStatus, nil)
+	err = sync.SyncAppsubClusterStatus(appsub, appsubClusterStatus, nil, nil)
 	if err != nil {
 		klog.Warning("error while sync app sub cluster status: ", err)
 	}
@@ -235,6 +235,8 @@ func (sync *KubeSynchronizer) ProcessSubResources(appsub *appv1alpha1.Subscripti
 	for _, resource := range resources {
 		appSubUnitStatus := SubscriptionUnitStatus{}
 
+		resource := resource
+
 		template, err := sync.OverrideResource(hostSub, &resource)
 
 		if err != nil {
@@ -252,11 +254,15 @@ func (sync *KubeSynchronizer) ProcessSubResources(appsub *appv1alpha1.Subscripti
 		appSubUnitStatus.APIVersion = resource.Resource.GetAPIVersion()
 		appSubUnitStatus.Kind = resource.Resource.GetKind()
 		appSubUnitStatus.Name = resource.Resource.GetName()
-		appSubUnitStatus.Namespace = resource.Resource.GetNamespace()
 
 		pkgGVR, isNamespaced, err := sync.getGVRfromGVK(resource.Gvk.Group, resource.Gvk.Version, resource.Gvk.Kind)
 
+		if isNamespaced {
+			appSubUnitStatus.Namespace = resource.Resource.GetNamespace()
+		}
+
 		if err != nil {
+			appSubUnitStatus.Namespace = resource.Resource.GetNamespace()
 			appSubUnitStatus.Phase = string(appSubStatusV1alpha1.PackageDeployFailed)
 			appSubUnitStatus.Message = err.Error()
 			appSubUnitStatuses = append(appSubUnitStatuses, appSubUnitStatus)
@@ -293,7 +299,7 @@ func (sync *KubeSynchronizer) ProcessSubResources(appsub *appv1alpha1.Subscripti
 		SubscriptionPackageStatus: appSubUnitStatuses,
 	}
 
-	err := sync.SyncAppsubClusterStatus(appsub, appsubClusterStatus, nil)
+	err := sync.SyncAppsubClusterStatus(appsub, appsubClusterStatus, nil, nil)
 	if err != nil {
 		klog.Warning("error while sync app sub cluster status: ", err)
 	}
@@ -387,6 +393,8 @@ func (sync *KubeSynchronizer) updateResourceByTemplateUnit(ri dynamic.ResourceIn
 	overwrite := false
 	merge := true
 	tplown := sync.Extension.GetHostFromObject(tplunit)
+	isHelmRelease := strings.EqualFold(tplunit.GetAPIVersion(), "apps.open-cluster-management.io/v1") &&
+		strings.EqualFold(tplunit.GetKind(), "HelmRelease")
 
 	tmplAnnotations := tplunit.GetAnnotations()
 
@@ -441,7 +449,7 @@ func (sync *KubeSynchronizer) updateResourceByTemplateUnit(ri dynamic.ResourceIn
 		newobj = utils.RemoveSubOwnerRef(newobj)
 	}
 
-	if merge || specialResource {
+	if (merge || specialResource) && !isHelmRelease {
 		if specialResource {
 			klog.Info("One of special resources requiring merge update")
 		}

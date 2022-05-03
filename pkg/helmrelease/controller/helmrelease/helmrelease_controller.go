@@ -252,6 +252,8 @@ func (r *ReconcileHelmRelease) Reconcile(ctx context.Context, request reconcile.
 	instance.Status.RemoveCondition(appv1.ConditionIrreconcilable)
 
 	if instance.GetDeletionTimestamp() != nil {
+		r.deleteAppSubStatus(instance)
+
 		return r.uninstall(instance, manager, dryRunManager)
 	}
 
@@ -281,10 +283,6 @@ func (r *ReconcileHelmRelease) Reconcile(ctx context.Context, request reconcile.
 
 	instance.Status.RemoveCondition(appv1.ConditionIrreconcilable)
 
-	if !manager.IsInstalled() {
-		return r.install(instance, manager, dryRunManager)
-	}
-
 	if !contains(instance.GetFinalizers(), finalizer) {
 		klog.V(1).Info("Adding finalizer (", finalizer, ") to ", helmreleaseNsn(instance))
 		controllerutil.AddFinalizer(instance, finalizer)
@@ -292,6 +290,10 @@ func (r *ReconcileHelmRelease) Reconcile(ctx context.Context, request reconcile.
 			klog.Error("Failed to add uninstall finalizer to ", helmreleaseNsn(instance))
 			return reconcile.Result{RequeueAfter: time.Minute * 1}, nil
 		}
+	}
+
+	if !manager.IsInstalled() {
+		return r.install(instance, manager, dryRunManager)
 	}
 
 	if manager.IsUpgradeRequired() {
@@ -386,7 +388,7 @@ func (r *ReconcileHelmRelease) install(instance *appv1.HelmRelease, manager helm
 	}
 
 	if installedRelease != nil && installedRelease.Manifest != "" && instance.OwnerReferences != nil {
-		r.populateAppSubStatus(installedRelease.Manifest, instance, manager, string(appSubStatusV1alpha1.PackageUnknown), "")
+		r.populateAppSubStatus(installedRelease.Manifest, instance, manager, string(appSubStatusV1alpha1.PackageUnknown), "", nil)
 	}
 
 	klog.Info("Installing Release ", helmreleaseNsn(instance))
@@ -481,7 +483,7 @@ func (r *ReconcileHelmRelease) install(instance *appv1.HelmRelease, manager helm
 
 	if installedRelease != nil && installedRelease.Manifest != "" && instance.OwnerReferences != nil {
 		r.populateAppSubStatus(installedRelease.Manifest, instance, manager, string(appSubStatusV1alpha1.PackageDeployed),
-			instance.Repo.Version+" "+string(appv1.ReasonInstallSuccessful))
+			instance.Repo.Version+" "+string(appv1.ReasonInstallSuccessful), nil)
 	}
 
 	return reconcile.Result{}, err
@@ -569,7 +571,7 @@ func (r *ReconcileHelmRelease) upgrade(instance *appv1.HelmRelease, manager helm
 
 	if upgradedRelease != nil && upgradedRelease.Manifest != "" && instance.OwnerReferences != nil {
 		r.populateAppSubStatus(upgradedRelease.Manifest, instance, manager, string(appSubStatusV1alpha1.PackageDeployed),
-			instance.Repo.Version+" "+string(appv1.ReasonUpgradeSuccessful))
+			instance.Repo.Version+" "+string(appv1.ReasonUpgradeSuccessful), nil)
 	}
 
 	return reconcile.Result{}, err
@@ -772,6 +774,11 @@ func (r *ReconcileHelmRelease) ensureStatusReasonPopulated(
 	}
 	instance.Status.RemoveCondition(appv1.ConditionIrreconcilable)
 
+	// ensure the appsub status resource exist
+	skipUpdate := true
+	r.populateAppSubStatus(expectedRelease.Manifest, instance, manager, string(appSubStatusV1alpha1.PackageDeployed),
+		instance.Repo.Version, &skipUpdate)
+
 	reason := appv1.ReasonUpgradeSuccessful
 	if expectedRelease.Version == 1 {
 		reason = appv1.ReasonInstallSuccessful
@@ -800,9 +807,11 @@ func (r *ReconcileHelmRelease) ensureStatusReasonPopulated(
 }
 
 func (r *ReconcileHelmRelease) populateAppSubStatus(
-	manifest string, instance *appv1.HelmRelease, manager helmoperator.Manager, packagePhase string, helmReleaseMessage string) {
+	manifest string, instance *appv1.HelmRelease, manager helmoperator.Manager, packagePhase string, helmReleaseMessage string,
+	skipUpdate *bool) {
 	for _, hrOwner := range instance.OwnerReferences {
-		if hrOwner.Kind == "Subscription" {
+		if strings.EqualFold(hrOwner.APIVersion, "apps.open-cluster-management.io/v1") &&
+			strings.EqualFold(hrOwner.Kind, "Subscription") {
 
 			caps, err := GetCapabilities(manager.GetActionConfig())
 			if err != nil {
@@ -852,11 +861,14 @@ func (r *ReconcileHelmRelease) populateAppSubStatus(
 					}
 					err := r.GetClient().Get(context.TODO(), appsubKey, appsub)
 					if err != nil {
-						klog.Infof("failed to get parent appsub, err: %v", err)
+						klog.Warning("failed to get parent appsub, err: ", err)
 					}
 
 					skipOrphanDelete := true
-					r.synchronizer.SyncAppsubClusterStatus(appsub, appsubClusterStatus, &skipOrphanDelete)
+					err = r.synchronizer.SyncAppsubClusterStatus(appsub, appsubClusterStatus, &skipOrphanDelete, skipUpdate)
+					if err != nil {
+						klog.Warning("error while sync app sub cluster status: ", err)
+					}
 				}
 			}
 		}
@@ -895,11 +907,37 @@ func (r *ReconcileHelmRelease) populateErrorAppSubStatus(
 			}
 			err := r.GetClient().Get(context.TODO(), appsubKey, appsub)
 			if err != nil {
-				klog.Infof("failed to get parent appsub, err: %v", err)
+				klog.Warning("failed to get parent appsub, err: ", err)
 			}
 
 			skipOrphanDelete := true
-			r.synchronizer.SyncAppsubClusterStatus(appsub, appsubClusterStatus, &skipOrphanDelete)
+			err = r.synchronizer.SyncAppsubClusterStatus(appsub, appsubClusterStatus, &skipOrphanDelete, nil)
+			if err != nil {
+				klog.Warning("error while sync app sub cluster status: ", err)
+			}
+		}
+	}
+}
+
+func (r *ReconcileHelmRelease) deleteAppSubStatus(instance *appv1.HelmRelease) {
+	for _, hrOwner := range instance.OwnerReferences {
+		if strings.EqualFold(hrOwner.APIVersion, "apps.open-cluster-management.io/v1") &&
+			strings.EqualFold(hrOwner.Kind, "Subscription") {
+
+			appSubUnitStatuses := []kubesynchronizer.SubscriptionUnitStatus{}
+
+			appsubClusterStatus := kubesynchronizer.SubscriptionClusterStatus{
+				Cluster:                   r.synchronizer.SynchronizerID.Name,
+				AppSub:                    types.NamespacedName{Name: hrOwner.Name, Namespace: instance.GetNamespace()},
+				Action:                    "DELETE",
+				SubscriptionPackageStatus: appSubUnitStatuses,
+			}
+
+			skipOrphanDelete := true
+			err := r.synchronizer.SyncAppsubClusterStatus(nil, appsubClusterStatus, &skipOrphanDelete, nil)
+			if err != nil {
+				klog.Warning("error while sync app sub cluster status: ", err)
+			}
 		}
 	}
 }
