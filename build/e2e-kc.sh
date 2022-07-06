@@ -13,6 +13,7 @@ if kubectl -n open-cluster-management-agent-addon wait --for=condition=available
     echo "App addon is available"
 else
     echo "FAILED: App addon is not available"
+    kubectl -n open-cluster-management-agent-addon get deploy
     exit 1
 fi
 
@@ -427,3 +428,33 @@ fi
 kubectl config use-context kind-hub
 kubectl delete -f test/e2e/cases/15-git-helm/install
 echo "PASSED test case 15-git-helm"
+
+### 16-helm-recreate
+echo "STARTING test 16-helm-recreate"
+kubectl config use-context kind-hub
+kubectl apply -f test/e2e/cases/16-helm-recreate
+sleep 30
+if kubectl get subscriptions.apps.open-cluster-management.io nginx-helm-sub | grep Propagated; then
+    echo "16-helm-recreate: nginx-helm-sub status is Propagated"
+else
+    echo "16-helm-recreate FAILED: nginx-helm-sub status is not Propagated"
+    exit 1
+fi
+kubectl config use-context kind-cluster1
+if kubectl delete service nginx-ingress-simple-controller; then
+    echo "16-helm-recreate: service nginx-ingress-simple-controller is deleted"
+else
+    echo "16-helm-recreate FAILED: service nginx-ingress-simple-controller is not deleted"
+    exit 1
+fi
+sleep 10
+if kubectl get service nginx-ingress-simple-controller; then
+    echo "16-helm-recreate: service nginx-ingress-simple-controller is recreated"
+else
+    echo "16-helm-recreate FAILED: service nginx-ingress-simple-controller is not recreated"
+    exit 1
+fi
+
+kubectl config use-context kind-hub
+kubectl delete -f test/e2e/cases/16-helm-recreate
+echo "PASSED test case 16-helm-recreate"
