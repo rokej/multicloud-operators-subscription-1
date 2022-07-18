@@ -396,6 +396,38 @@ var ServiceAccountPredicateFunctions = predicate.Funcs{
 	},
 }
 
+// AddonSATokenSecretPredicateFunctions watches for changes in klusterlet-addon-appmgr
+// service account token secret in open-cluster-management-agent-addon namespace
+var AddonSATokenSecretPredicateFunctions = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		newSecret := e.ObjectNew.(*corev1.Secret)
+
+		if strings.EqualFold(newSecret.Namespace, addonServiceAccountNamespace) && strings.HasPrefix(newSecret.Name, addonServiceAccountName+"-token-") {
+			return true
+		}
+
+		return false
+	},
+	CreateFunc: func(e event.CreateEvent) bool {
+		secret := e.Object.(*corev1.Secret)
+
+		if strings.EqualFold(secret.Namespace, addonServiceAccountNamespace) && strings.HasPrefix(secret.Name, addonServiceAccountName+"-token-") {
+			return true
+		}
+
+		return false
+	},
+	DeleteFunc: func(e event.DeleteEvent) bool {
+		secret := e.Object.(*corev1.Secret)
+
+		if strings.EqualFold(secret.Namespace, addonServiceAccountNamespace) && strings.HasPrefix(secret.Name, addonServiceAccountName+"-token-") {
+			return true
+		}
+
+		return false
+	},
+}
+
 // GetHostSubscriptionFromObject extract the namespacedname of subscription hosting the object resource
 func GetHostSubscriptionFromObject(obj metav1.Object) *types.NamespacedName {
 	if obj == nil {
@@ -1038,7 +1070,7 @@ func CompareManifestWork(oldManifestWork, newManifestWork *manifestWorkV1.Manife
 
 		err := json.Unmarshal(oldManifestWork.Spec.Workload.Manifests[i].Raw, oldManifest)
 		if err != nil {
-			klog.Errorf("falied to unmarshal old manifestwork, err: %v", err)
+			klog.Errorf("failed to unmarshal old manifestwork, err: %v", err)
 			return false
 		}
 
@@ -1046,7 +1078,7 @@ func CompareManifestWork(oldManifestWork, newManifestWork *manifestWorkV1.Manife
 
 		err = json.Unmarshal(newManifestWork.Spec.Workload.Manifests[i].Raw, newManifest)
 		if err != nil {
-			klog.Errorf("falied to unmarshal new manifestwork, err: %v", err)
+			klog.Errorf("failed to unmarshal new manifestwork, err: %v", err)
 			return false
 		}
 
